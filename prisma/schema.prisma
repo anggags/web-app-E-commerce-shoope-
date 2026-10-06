@@ -1,0 +1,333 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum StoreStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum ProductStatus {
+  DRAFT
+  PENDING_REVIEW
+  ACTIVE
+  REJECTED
+  ARCHIVED
+}
+
+enum OrderStatus {
+  AWAITING_PAYMENT
+  PAID
+  PROCESSING
+  SHIPPED
+  COMPLETED
+  CANCELED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  COD
+  BANK_TRANSFER
+  E_WALLET
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  REJECTED
+}
+
+/// Akun pengguna. Field `email`, `emailVerified`, `image` mengikuti standar Auth.js.
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          Role      @default(BUYER)
+  phone         String?
+  isBanned      Boolean   @default(false)
+  bannedAt      DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts  Account[]
+  sessions  Session[]
+  store     Store?
+  cartItems CartItem[]
+  orders    Order[]
+  reviews   Review[]
+  addresses Address[]
+
+  @@index([role])
+}
+
+/// Provider OAuth (Google). Dibutuhkan oleh adapter Prisma.
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// MVP: 1 user = 1 toko.
+model Store {
+  id               String      @id @default(cuid())
+  ownerId          String      @unique
+  name             String      @unique
+  slug             String      @unique
+  description      String?
+  logoUrl          String?
+  bannerUrl        String?
+  status           StoreStatus @default(PENDING)
+  city             String?
+  phone            String?
+  rating           Int         @default(0)
+  ratingCount      Int         @default(0)
+  shippingFee      Int         @default(0)
+  freeShippingMin  Int?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  owner    User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  products Product[]
+  orders   Order[]
+  cartItems CartItem[]
+
+  @@index([status])
+}
+
+model Product {
+  id          String        @id @default(cuid())
+  storeId     String
+  slug        String        @unique
+  name        String
+  description String
+  category    String?
+  status      ProductStatus @default(DRAFT)
+  /// Harga varian termurah, diperbarui otomatis saat varian disimpan.
+  basePrice   Int           @default(0)
+  /// Nama opsi variasi, mis. ["Warna", "Ukuran"].
+  options     String[]      @default([])
+  weightGrams Int?
+  soldCount   Int           @default(0)
+  viewCount   Int           @default(0)
+  rating      Int           @default(0)
+  ratingCount Int           @default(0)
+  publishedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  store      Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  images     ProductImage[]
+  variants   ProductVariant[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+  reviews    Review[]
+
+  @@index([storeId, status])
+  @@index([status, createdAt])
+  @@index([category])
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  url       String
+  alt       String?
+  isPrimary Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model ProductVariant {
+  id             String  @id @default(cuid())
+  productId      String
+  sku            String  @unique
+  name           String
+  /// {"Warna":"Merah","Ukuran":"M"}
+  options        Json
+  price          Int
+  compareAtPrice Int?
+  stock          Int     @default(0)
+  weightGrams    Int?
+  isActive       Boolean @default(true)
+
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@index([productId, isActive])
+}
+
+/// Sumber kebenaran keranjang untuk user yang sudah login.
+model CartItem {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  variantId String
+  /// Denormalisasi agar halaman cart bisa group per-seller tanpa join.
+  storeId   String
+  quantity  Int      @default(1)
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  store   Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, variantId])
+  @@index([userId])
+}
+
+model Address {
+  id            String  @id @default(cuid())
+  userId        String
+  label         String?
+  recipientName String
+  phone         String
+  province      String
+  city          String
+  district      String?
+  postalCode    String?
+  street        String  @db.Text
+  isDefault     Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// 1 order = 1 toko (pola Shopee): checkout multi-seller menghasilkan beberapa order.
+model Order {
+  id            String        @id @default(cuid())
+  orderNumber   String        @unique
+  userId        String
+  storeId       String
+  status        OrderStatus   @default(AWAITING_PAYMENT)
+  paymentMethod PaymentMethod @default(COD)
+  paymentStatus PaymentStatus @default(UNPAID)
+
+  subtotal Int
+  shippingFee Int @default(0)
+  total    Int
+  buyerNote String?
+
+  recipientName   String
+  shippingPhone   String
+  shippingAddress String  @db.Text
+
+  courier        String?
+  trackingNumber String?
+  shippedAt      DateTime?
+  deliveredAt    DateTime?
+  canceledAt     DateTime?
+  cancelReason   String?
+  paidAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user  User        @relation(fields: [userId], references: [id])
+  store Store       @relation(fields: [storeId], references: [id])
+  items OrderItem[]
+
+  @@index([userId, createdAt])
+  @@index([storeId, status])
+  @@index([status, createdAt])
+}
+
+model OrderItem {
+  id          String  @id @default(cuid())
+  orderId     String
+  productId   String
+  variantId   String
+  storeId     String
+  productName String
+  variantName String
+  imageUrl    String?
+  price       Int
+  quantity    Int
+  subtotal    Int
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id])
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+  review  Review?
+
+  @@index([orderId])
+  @@index([storeId])
+}
+
+model Review {
+  id          String       @id @default(cuid())
+  productId   String
+  userId      String
+  orderItemId String?      @unique
+  rating      Int
+  comment     String?
+  status      ReviewStatus @default(PENDING)
+  sellerReply String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  product   Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id])
+
+  @@index([productId, status])
+}
